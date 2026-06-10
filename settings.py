@@ -70,3 +70,10 @@ ASSETS_DIR = Path("assets")
 CAMERA_PREVIEW_SIZE = (240, 180)
 CAMERA_PREVIEW_MARGIN = 12
 CAMERA_PREVIEW_CORNER = "bottomleft"  # options: topright, topleft, bottomleft
+
+# Levels: higher level -> more rats, faster rats, shorter spawn interval
+LEVELS = {
+	1: {"total_rats": 5, "speed_multiplier": 1.0, "spawn_interval": 1.0},
+	2: {"total_rats": 8, "speed_multiplier": 1.25, "spawn_interval": 0.8},
+	3: {"total_rats": 12, "speed_multiplier": 1.6, "spawn_interval": 0.6},
+}

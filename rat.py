@@ -14,9 +14,10 @@ from utils import clamp, load_image
 class Rat(pygame.sprite.Sprite):
     """Single enemy rat with random movement and a short hit animation."""
 
-    def __init__(self, play_area: pygame.Rect) -> None:
+    def __init__(self, play_area: pygame.Rect, speed_multiplier: float = 1.0) -> None:
         super().__init__()
         self.play_area = play_area
+        self.speed_multiplier = float(speed_multiplier)
         self.original_image = load_image(settings.RAT_IMAGE_PATH, (settings.RAT_SIZE, settings.RAT_SIZE))
         self.position = pygame.Vector2()
         self.velocity = pygame.Vector2()
@@ -51,7 +52,7 @@ class Rat(pygame.sprite.Sprite):
         direction = pygame.Vector2(random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0))
         if direction.length_squared() == 0:
             direction = pygame.Vector2(1, 0)
-        speed = random.uniform(settings.RAT_SPEED_MIN, settings.RAT_SPEED_MAX)
+        speed = random.uniform(settings.RAT_SPEED_MIN, settings.RAT_SPEED_MAX) * getattr(self, "speed_multiplier", 1.0)
         return direction.normalize() * speed
 
     def trigger_hit(self) -> None:

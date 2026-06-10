@@ -64,6 +64,13 @@ class Game:
         self.total_killed = 0
         self.spawn_timer = 0.0
         self.won = False
+        # level/menu
+        self.level = 1
+        self.level_buttons: list[Button] = []
+        self.start_button: Button | None = None
+        self.level_total = settings.LEVELS[self.level]["total_rats"]
+        self.current_speed_multiplier = settings.LEVELS[self.level]["speed_multiplier"]
+        self.spawn_interval = settings.LEVELS[self.level]["spawn_interval"]
         self.effects = pygame.sprite.Group()
         self.sounds = SoundManager()
         self.tracker = HandTracker(settings.SCREEN_SIZE)
@@ -82,14 +89,13 @@ class Game:
         )
 
         self.running = True
-        self.state = "playing"
+        self.state = "menu"
         self.score = 0
         self.elapsed_time = 0.0
         self.game_over_sound_played = False
 
         self.tracker.start()
-        # initial rat
-        self._spawn_rat()
+        self._create_menu()
 
     def restart(self) -> None:
         self.score = 0
@@ -121,8 +127,11 @@ class Game:
                 self.running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 self.running = False
-            elif self.state == "game_over" and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self._activate_game_over_buttons(event.pos)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.state == "game_over":
+                    self._activate_game_over_buttons(event.pos)
+                elif self.state == "menu":
+                    self._activate_menu_button(event.pos)
 
     def _update(self, dt: float) -> None:
         tracker_state = self.tracker.get_state()
@@ -138,10 +147,10 @@ class Game:
             # update all rats
             self.rats.update(dt)
 
-            # spawn new rats over time until we reach the configured total
-            if self.total_spawned < settings.TOTAL_RATS:
+            # spawn new rats over time until we reach the configured total for the selected level
+            if self.total_spawned < self.level_total:
                 self.spawn_timer += dt
-                if self.spawn_timer >= settings.RAT_SPAWN_INTERVAL:
+                if self.spawn_timer >= self.spawn_interval:
                     self.spawn_timer = 0.0
                     self._spawn_rat()
 
@@ -164,14 +173,35 @@ class Game:
                 self.state = "game_over"
 
             # win when enough rats have been eliminated
-            if self.total_killed >= settings.TOTAL_RATS:
-                self.state = "game_over"
-                self.won = True
+            if self.total_killed >= self.level_total:
+                # advance to next level automatically if available
+                if self.level < 3:
+                    self.level += 1
+                    # apply new level settings
+                    self.level_total = settings.LEVELS[self.level]["total_rats"]
+                    self.current_speed_multiplier = settings.LEVELS[self.level]["speed_multiplier"]
+                    self.spawn_interval = settings.LEVELS[self.level]["spawn_interval"]
+                    # reset counters and continue playing at next level
+                    self.total_spawned = 0
+                    self.total_killed = 0
+                    self.spawn_timer = 0.0
+                    self.score = 0
+                    self.elapsed_time = 0.0
+                    self.rats.empty()
+                    self._create_menu()
+                    self._spawn_rat()
+                else:
+                    self.state = "game_over"
+                    self.won = True
 
         elif self.state == "game_over":
             hovered_button = self._button_under_point(self.cursor.rect.center)
             if hovered_button and self.cursor.just_hit:
                 self._activate_game_over_buttons(self.cursor.rect.center)
+        elif self.state == "menu":
+            hovered_button = self._button_under_point(self.cursor.rect.center)
+            if hovered_button and self.cursor.just_hit:
+                self._activate_menu_button(self.cursor.rect.center)
 
         if self.state == "game_over" and not self.game_over_sound_played:
             self.sounds.play_game_over()
@@ -216,6 +246,8 @@ class Game:
 
         if self.state == "game_over":
             self._draw_game_over()
+        elif self.state == "menu":
+            self._draw_menu()
 
         self.cursor.draw(self.screen)
 
@@ -293,17 +325,86 @@ class Game:
             return self.exit_button
         return None
 
+    def _create_menu(self) -> None:
+        # create level select buttons and start button
+        btn_w = 160
+        btn_h = 64
+        spacing = 24
+        total_width = btn_w * 3 + spacing * 2
+        left = settings.SCREEN_WIDTH // 2 - total_width // 2
+        y = settings.SCREEN_HEIGHT // 2 - 60
+
+        self.level_buttons = []
+        for i in range(1, 4):
+            rect = pygame.Rect(left + (i - 1) * (btn_w + spacing), y, btn_w, btn_h)
+            btn = Button(f"Level {i}", rect, settings.BUTTON_PRIMARY if i == self.level else settings.BUTTON_SECONDARY, settings.BUTTON_PRIMARY_HOVER if i == self.level else settings.BUTTON_SECONDARY_HOVER)
+            self.level_buttons.append(btn)
+
+        self.start_button = Button("Start", pygame.Rect(settings.SCREEN_WIDTH // 2 - 80, y + btn_h + 28, 160, 64), settings.BUTTON_PRIMARY, settings.BUTTON_PRIMARY_HOVER)
+
+    def _draw_menu(self) -> None:
+        panel_rect = pygame.Rect(settings.SCREEN_WIDTH // 2 - 280, settings.SCREEN_HEIGHT // 2 - 180, 560, 360)
+        draw_panel(self.screen, panel_rect, settings.PANEL, shadow_offset=14, radius=30)
+        draw_text(self.screen, self.font_huge, "Select Level", settings.TEXT_DARK, (panel_rect.centerx, panel_rect.top + 64), center=True)
+
+        for btn in self.level_buttons:
+            hovered = btn.rect.collidepoint(self.cursor.rect.center)
+            btn.draw(self.screen, self.font_medium, hovered)
+
+        hovered = self.start_button.rect.collidepoint(self.cursor.rect.center)
+        self.start_button.draw(self.screen, self.font_medium, hovered)
+
+    def _button_under_point(self, point: tuple[int, int]) -> Button | None:
+        # override to include menu buttons when in game_over/menu
+        if self.state == "menu":
+            for btn in self.level_buttons:
+                if btn.rect.collidepoint(point):
+                    return btn
+            if self.start_button and self.start_button.rect.collidepoint(point):
+                return self.start_button
+
+        if self.restart_button.rect.collidepoint(point):
+            return self.restart_button
+        if self.exit_button.rect.collidepoint(point):
+            return self.exit_button
+        return None
+
     def _activate_game_over_buttons(self, point: tuple[int, int]) -> None:
         if self.restart_button.rect.collidepoint(point):
             self.restart()
         elif self.exit_button.rect.collidepoint(point):
             self.running = False
 
+    def _activate_menu_button(self, point: tuple[int, int]) -> None:
+        # handle level selection and start
+        for idx, btn in enumerate(self.level_buttons, start=1):
+            if btn.rect.collidepoint(point):
+                self.level = idx
+                # apply level settings
+                self.level_total = settings.LEVELS[self.level]["total_rats"]
+                self.current_speed_multiplier = settings.LEVELS[self.level]["speed_multiplier"]
+                self.spawn_interval = settings.LEVELS[self.level]["spawn_interval"]
+                # refresh menu look
+                self._create_menu()
+                return
+
+        if self.start_button and self.start_button.rect.collidepoint(point):
+            # begin the game at selected level
+            self.total_spawned = 0
+            self.total_killed = 0
+            self.spawn_timer = 0.0
+            self.score = 0
+            self.elapsed_time = 0.0
+            self.won = False
+            self.state = "playing"
+            self.rats.empty()
+            self._spawn_rat()
+
     def _spawn_rat(self) -> None:
         """Create and add a new Rat to the playfield if under the total limit."""
-        if self.total_spawned >= settings.TOTAL_RATS:
+        if self.total_spawned >= self.level_total:
             return
-        rat = Rat(self.play_area)
+        rat = Rat(self.play_area, speed_multiplier=self.current_speed_multiplier)
         self.rats.add(rat)
         self.total_spawned += 1
 
