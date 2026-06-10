@@ -11,6 +11,8 @@ from hand_tracking import HandTracker
 from rat import Rat
 from sounds import SoundManager
 from utils import create_font, draw_panel, draw_text, format_seconds, scale_background
+import cv2
+import numpy as np
 
 
 class Button:
@@ -56,7 +58,12 @@ class Game:
         self.font_huge = create_font(82, bold=True)
 
         self.cursor = Cursor()
-        self.rat = Rat(self.play_area)
+        # manage multiple rats
+        self.rats = pygame.sprite.Group()
+        self.total_spawned = 0
+        self.total_killed = 0
+        self.spawn_timer = 0.0
+        self.won = False
         self.effects = pygame.sprite.Group()
         self.sounds = SoundManager()
         self.tracker = HandTracker(settings.SCREEN_SIZE)
@@ -81,6 +88,8 @@ class Game:
         self.game_over_sound_played = False
 
         self.tracker.start()
+        # initial rat
+        self._spawn_rat()
 
     def restart(self) -> None:
         self.score = 0
@@ -88,7 +97,12 @@ class Game:
         self.state = "playing"
         self.game_over_sound_played = False
         self.effects.empty()
-        self.rat.respawn()
+        self.rats.empty()
+        self.total_spawned = 0
+        self.total_killed = 0
+        self.spawn_timer = 0.0
+        self.won = False
+        self._spawn_rat()
 
     def run(self) -> None:
         try:
@@ -120,19 +134,39 @@ class Game:
 
         if self.state == "playing":
             self.elapsed_time += dt
-            self.rat.update(dt)
 
-            if self.cursor.just_hit and self.rat.can_be_hit:
+            # update all rats
+            self.rats.update(dt)
+
+            # spawn new rats over time until we reach the configured total
+            if self.total_spawned < settings.TOTAL_RATS:
+                self.spawn_timer += dt
+                if self.spawn_timer >= settings.RAT_SPAWN_INTERVAL:
+                    self.spawn_timer = 0.0
+                    self._spawn_rat()
+
+            # process hits against any rat
+            if self.cursor.just_hit:
                 cursor_hit_rect = self.cursor.get_hit_rect().inflate(10, 10)
-                rat_hit_rect = self.rat.get_hit_rect().inflate(-6, -4)
-                if cursor_hit_rect.colliderect(rat_hit_rect):
-                    self.score += 1
-                    self.rat.trigger_hit()
-                    self.effects.add(HitEffect(self.rat.rect.center))
-                    self.sounds.play_hit()
+                for rat in list(self.rats.sprites()):
+                    if not rat.can_be_hit:
+                        continue
+                    rat_hit_rect = rat.get_hit_rect().inflate(-6, -4)
+                    if cursor_hit_rect.colliderect(rat_hit_rect):
+                        self.score += 1
+                        self.rats.remove(rat)
+                        self.total_killed += 1
+                        self.effects.add(HitEffect(rat.rect.center))
+                        self.sounds.play_hit()
 
+            # time-up game over
             if self.elapsed_time >= settings.GAME_DURATION:
                 self.state = "game_over"
+
+            # win when enough rats have been eliminated
+            if self.total_killed >= settings.TOTAL_RATS:
+                self.state = "game_over"
+                self.won = True
 
         elif self.state == "game_over":
             hovered_button = self._button_under_point(self.cursor.rect.center)
@@ -147,7 +181,34 @@ class Game:
         self.screen.blit(self.background, (0, 0))
         self._draw_playfield_glow()
 
-        self.rat.draw(self.screen)
+        # draw camera preview (small) in corner if available
+        try:
+            frame = self.tracker.get_latest_preview()
+            if frame is not None:
+                # convert BGR->RGB for pygame
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w = rgb.shape[:2]
+                surf = pygame.image.frombuffer(rgb.tobytes(), (w, h), "RGB")
+                target_w, target_h = settings.CAMERA_PREVIEW_SIZE
+                preview_surf = pygame.transform.smoothscale(surf, (target_w, target_h))
+                margin = settings.CAMERA_PREVIEW_MARGIN
+                corner = settings.CAMERA_PREVIEW_CORNER
+                if corner == "topleft":
+                    pos = (margin, margin)
+                elif corner == "bottomleft":
+                    pos = (margin, settings.SCREEN_HEIGHT - target_h - margin)
+                else:
+                    pos = (settings.SCREEN_WIDTH - target_w - margin, margin)
+                # draw rounded panel behind preview
+                panel_rect = pygame.Rect(pos[0] - 6, pos[1] - 6, target_w + 12, target_h + 12)
+                draw_panel(self.screen, panel_rect, settings.PANEL_ALT, shadow_offset=6, radius=12)
+                self.screen.blit(preview_surf, pos)
+        except Exception:
+            # ignore preview rendering errors
+            pass
+
+        for rat in self.rats.sprites():
+            rat.draw(self.screen)
         for effect in self.effects.sprites():
             effect.draw(self.screen)
 
@@ -202,7 +263,8 @@ class Game:
         panel_rect = pygame.Rect(settings.SCREEN_WIDTH // 2 - 245, settings.SCREEN_HEIGHT // 2 - 165, 490, 330)
         draw_panel(self.screen, panel_rect, settings.PANEL, shadow_offset=14, radius=30)
 
-        draw_text(self.screen, self.font_huge, "Time Up!", settings.TEXT_DARK, (panel_rect.centerx, panel_rect.top + 72), center=True)
+        title_text = "You Win!" if getattr(self, "won", False) else "Time Up!"
+        draw_text(self.screen, self.font_huge, title_text, settings.TEXT_DARK, (panel_rect.centerx, panel_rect.top + 72), center=True)
         draw_text(
             self.screen,
             self.font_large,
@@ -214,7 +276,7 @@ class Game:
         draw_text(
             self.screen,
             self.font_small,
-            "Pinch/close your hand over a button, or click with the mouse.",
+            "Pinch/close your hand over a button",
             settings.TEXT_DARK,
             (panel_rect.centerx, panel_rect.top + 208),
             center=True,
@@ -236,6 +298,14 @@ class Game:
             self.restart()
         elif self.exit_button.rect.collidepoint(point):
             self.running = False
+
+    def _spawn_rat(self) -> None:
+        """Create and add a new Rat to the playfield if under the total limit."""
+        if self.total_spawned >= settings.TOTAL_RATS:
+            return
+        rat = Rat(self.play_area)
+        self.rats.add(rat)
+        self.total_spawned += 1
 
     def shutdown(self) -> None:
         self.tracker.stop()

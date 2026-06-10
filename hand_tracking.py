@@ -28,6 +28,7 @@ class HandTracker:
         self.preview_enabled = True
         self.preview_fps = 0.0
         self.error_message = ""
+        self._latest_frame = None
 
         self._lock = threading.Lock()
         self._running = False
@@ -97,10 +98,8 @@ class HandTracker:
             self._landmarker.close()
             self._landmarker = None
 
-        try:
-            cv2.destroyWindow(settings.PREVIEW_WINDOW_NAME)
-        except cv2.error:
-            pass
+        # we no longer open a persistent OpenCV window for preview in-game
+        # so there's nothing to destroy here
 
     def get_state(self) -> dict[str, object]:
         with self._lock:
@@ -199,15 +198,10 @@ class HandTracker:
                 cv2.LINE_AA,
             )
 
-            if self.preview_enabled:
-                try:
-                    cv2.imshow(settings.PREVIEW_WINDOW_NAME, annotated_frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord("q"):
-                        self.preview_enabled = False
-                        cv2.destroyWindow(settings.PREVIEW_WINDOW_NAME)
-                except cv2.error:
-                    self.preview_enabled = False
+            # Always keep a copy of the latest annotated frame for in-game preview.
+            # Do not open a large OpenCV window when embedding preview inside the game.
+            with self._lock:
+                self._latest_frame = annotated_frame.copy()
 
         self.webcam_ok = False
 
@@ -250,3 +244,10 @@ class HandTracker:
                 self.hand_visible = hand_visible
             if webcam_ok is not None:
                 self.webcam_ok = webcam_ok
+
+    def get_latest_preview(self):
+        """Return a copy of the latest annotated preview frame (BGR) or None."""
+        with self._lock:
+            if self._latest_frame is None:
+                return None
+            return self._latest_frame.copy()
